@@ -1,12 +1,21 @@
+#define _GNU_SOURCE
 #include <stdbool.h>
 #include <stdio.h>
 #include <pthread.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/types.h>
 #include <unistd.h>
+#include <sys/time.h>
+#include <sys/syscall.h>
+#include <linux/futex.h>
 
 
 // util
+
+static inline int futex(int *uaddr, int op, int val) {
+    return syscall(SYS_futex, uaddr, op, val, 0, 0, 0);
+}
 
 static inline bool atomic_compare_exchange(int* ptr, int compare, int exchange) {
     return __atomic_compare_exchange_n(ptr, &compare, exchange,
@@ -22,21 +31,31 @@ static inline int atomic_add_fetch(int* ptr, int d) {
 }
 
 
-// spinlock library
+// mutex library
 
-struct spinlock {
+struct mutex {
+    // 0 unlocked
+    // 1 locked
     int locked;
+    // number of threads requesting a lock
+    int count;
 };
 
-#define SPINLOCK_INIT { 0 };
+#define MUTEX_INIT { 0, 0 };
 
-void spinlock_lock(struct spinlock* spinlock) {
-    while (!atomic_compare_exchange(&spinlock->locked, 0, 1)) {
+void mutex_lock(struct mutex* mutex) {
+    atomic_add_fetch(&mutex->count, 1);
+    while (!atomic_compare_exchange(&mutex->locked, 0, 1)) {
+        futex(&mutex->locked, FUTEX_WAIT, 1);
     }
 }
 
-void spinlock_unlock(struct spinlock* spinlock) {
-    atomic_store(&spinlock->locked, 0);
+void mutex_unlock(struct mutex* mutex) {
+    int left = atomic_add_fetch(&mutex->count, -1);
+    atomic_store(&mutex->locked, 0);
+    if (left > 0) {
+        futex(&mutex->locked, FUTEX_WAKE, 1);
+    }
 }
 
 
@@ -44,28 +63,27 @@ void spinlock_unlock(struct spinlock* spinlock) {
 
 struct my_thread_params {
     int n;
-    struct spinlock* lock;
+    struct mutex* lock;
     int* lock_count;
 };
 
 void* run_my_thread(void* param) {
     struct my_thread_params* my = (struct my_thread_params*) param;
     for (;;) {
-        spinlock_lock(my->lock);
+        mutex_lock(my->lock);
         if (atomic_add_fetch(my->lock_count, 1) > 1) {
             fprintf(stderr, "lock is broken\n");
             exit(1);
         }
         printf("thread %d\n", my->n);
         atomic_add_fetch(my->lock_count, -1);
-        spinlock_unlock(my->lock);
-        getppid();
+        mutex_unlock(my->lock);
     }
     return 0;
 }
 
 int main() {
-    struct spinlock lock = SPINLOCK_INIT;
+    struct mutex lock = MUTEX_INIT;
     int lock_count = 0;
     static const int nthreads = 5;
     pthread_t threads[nthreads];
