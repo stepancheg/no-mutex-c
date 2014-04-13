@@ -1,7 +1,20 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <pthread.h>
 #include <string.h>
 #include <stdlib.h>
+
+
+// util
+
+static inline bool atomic_compare_exchange(int* ptr, int compare, int exchange) {
+    return __atomic_compare_exchange_n(ptr, &compare, exchange,
+            0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+
+static inline void atomic_store(int* ptr, int value) {
+    __atomic_store_n(ptr, 0, __ATOMIC_SEQ_CST);
+}
 
 
 // spinlock library
@@ -13,12 +26,12 @@ struct spinlock {
 #define SPINLOCK_INIT { 0 };
 
 void spinlock_lock(struct spinlock* spinlock) {
-    while (__atomic_exchange_n(&spinlock->locked, 1, __ATOMIC_SEQ_CST) == 1) {
+    while (!atomic_compare_exchange(&spinlock->locked, 0, 1)) {
     }
 }
 
 void spinlock_unlock(struct spinlock* spinlock) {
-    __atomic_store_n(&spinlock->locked, 0, __ATOMIC_SEQ_CST);
+    atomic_store(&spinlock->locked, 0);
 }
 
 
