@@ -34,8 +34,8 @@ static inline unsigned atomic_add_fetch(unsigned* ptr, unsigned d) {
 // mutex library
 
 struct mutex {
-    // high bit:   locked
-    // other bits: number of clients
+    // high bit:  locked
+    // rest bits: number of clients
     unsigned locked;
 };
 
@@ -84,19 +84,12 @@ void mutex_unlock(struct mutex* mutex) {
         return;
     }
 
-    // unlock
-    for (;;) {
-        unsigned v = atomic_load(&mutex->locked);
-        if (!(v & LOCKED_MASK)) {
-            // assert
-            abort();
-        }
-        unsigned n = v & ~LOCKED_MASK;
-        if (atomic_compare_exchange(&mutex->locked, v, n - 1)) {
-            futex(&mutex->locked, FUTEX_WAKE, 1);
-            return;
-        }
+    // unlock: clear locked bit and decrement number of lockers
+    unsigned r = atomic_add_fetch(&mutex->locked, LOCKED_MASK - 1);
+    if (r & LOCKED_MASK) {
+        abort();
     }
+    futex(&mutex->locked, FUTEX_WAKE, 1);
 }
 
 
